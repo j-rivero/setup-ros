@@ -26,7 +26,19 @@ export async function runLinux() {
 	}
 
 	await utils.exec("sudo", ["bash", "-c", "echo 'Etc/UTC' > /etc/timezone"]);
-	await utils.exec("sudo", ["apt-get", "update"]);
+
+	for (var _i = 0; _i < 10; _i++) {
+	    	await utils.exec("echo 'Trying'");
+	    	try {
+		    	await utils.exec("sudo", ["apt-get", "update"]);
+			break
+	    	} catch (err) {
+			if (_i == 9) {
+		    		core.setFailed("MAX 9 tries");
+			}
+	    	}
+	}
+
 
 	// Install tools required to configure the worker system.
 	await apt.runAptGetInstall(["curl", "gnupg2", "locales", "lsb-release"]);

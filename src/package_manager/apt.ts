@@ -34,6 +34,26 @@ const aptDependencies: string[] = [
 	"rti-connext-dds-5.3.1"
 ];
 
+function delay(ms: number) {
+	return new Promise( resolve => setTimeout(resolve, ms) );
+}
+
+export async function runAptGetUpdate(maxRetryAttemps: number): Promise<number> {
+	for (var _i = 1; _i < maxRetryAttemps; _i++) {
+		await utils.exec("echo 'Attempt: " + _i);
+		try {
+			await utils.exec("sudo", ["apt-get", "update"]);
+			break
+		} catch (err) {
+			if (_i == maxRetryAttemps)
+				return -1;
+			await utils.exec("echo 'apt-get update filed. Waiting 1 sec before attempting again'");
+			await delay(1000);
+		}
+	}
+	return 0;
+}
+
 /**
  * Run apt-get install on list of specified packages.
  *
@@ -44,7 +64,7 @@ const aptDependencies: string[] = [
  * This package would normally be installed automatically by rosdep, but
  * there is no way to pass RTI_NC_LICENSE_ACCEPTED through rosdep.
  *
- * @param   packages        list of Debian pacakges to be installed
+ * @param   packages		list of Debian pacakges to be installed
  * @returns Promise<number> exit code
  */
 export async function runAptGetInstall(packages: string[]): Promise<number> {

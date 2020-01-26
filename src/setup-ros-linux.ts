@@ -5,17 +5,22 @@ import * as apt from "./package_manager/apt";
 import * as pip from "./package_manager/pip";
 import * as utils from "./utils";
 
+
 /**
  * Install ROS 2 on a Linux worker.
  */
 export async function runLinux() {
+	var maxRetryAttemps: number = +core.getInput("max-retry-attempts");
+	if (! (maxRetryAttemps))
+		maxRetryAttemps = 1
+
 	// When this action runs in a Docker image, sudo may be missing.
 	// This installs sudo to avoid having to handle both cases (action runs as
 	// root, action does not run as root) everywhere in the action.
 	try {
 		await io.which("sudo", true);
 	} catch (err) {
-		await utils.exec("apt-get", ["update"]);
+		await apt.runAptGetUpdate(maxRetryAttemps)
 		await utils.exec("apt-get", [
 			"install",
 			"--no-install-recommends",
@@ -26,18 +31,7 @@ export async function runLinux() {
 	}
 
 	await utils.exec("sudo", ["bash", "-c", "echo 'Etc/UTC' > /etc/timezone"]);
-
-	for (var _i = 0; _i < 10; _i++) {
-	    	await utils.exec("echo 'Trying'");
-	    	try {
-		    	await utils.exec("sudo", ["apt-get", "update"]);
-			break
-	    	} catch (err) {
-			if (_i == 9) {
-		    		core.setFailed("MAX 9 tries");
-			}
-	    	}
-	}
+	await apt.runAptGetUpdate(maxRetryAttemps)
 
 	// Install tools required to configure the worker system.
 	await apt.runAptGetInstall(["curl", "gnupg2", "locales", "lsb-release"]);
@@ -76,7 +70,7 @@ export async function runLinux() {
 		"-c",
 		`echo "deb http://packages.ros.org/ros2/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros2-latest.list`
 	]);
-	await utils.exec("sudo", ["apt-get", "update"]);
+	await apt.runAptGetUpdate(maxRetryAttemps)
 
 	// Install rosdep and vcs, as well as FastRTPS dependencies, OpenSplice, and RTI Connext.
 	// vcs dependencies (e.g. git), as well as base building packages are not pulled by rosdep, so

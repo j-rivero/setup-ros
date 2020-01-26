@@ -952,6 +952,9 @@ const utils = __importStar(__webpack_require__(163));
  */
 function runLinux() {
     return __awaiter(this, void 0, void 0, function* () {
+        var maxRetryAttemps = +core.getInput("max-retry-attempts");
+        if (!(maxRetryAttemps))
+            maxRetryAttemps = 1;
         // When this action runs in a Docker image, sudo may be missing.
         // This installs sudo to avoid having to handle both cases (action runs as
         // root, action does not run as root) everywhere in the action.
@@ -959,7 +962,7 @@ function runLinux() {
             yield io.which("sudo", true);
         }
         catch (err) {
-            yield utils.exec("apt-get", ["update"]);
+            yield apt.runAptGetUpdate(maxRetryAttemps);
             yield utils.exec("apt-get", [
                 "install",
                 "--no-install-recommends",
@@ -969,18 +972,7 @@ function runLinux() {
             ]);
         }
         yield utils.exec("sudo", ["bash", "-c", "echo 'Etc/UTC' > /etc/timezone"]);
-        for (var _i = 0; _i < 10; _i++) {
-            yield utils.exec("echo 'Trying'");
-            try {
-                yield utils.exec("sudo", ["apt-get", "update"]);
-                break;
-            }
-            catch (err) {
-                if (_i == 9) {
-                    core.setFailed("MAX 9 tries");
-                }
-            }
-        }
+        yield apt.runAptGetUpdate(maxRetryAttemps);
         // Install tools required to configure the worker system.
         yield apt.runAptGetInstall(["curl", "gnupg2", "locales", "lsb-release"]);
         // Select a locale supporting Unicode.
@@ -1015,7 +1007,7 @@ function runLinux() {
             "-c",
             `echo "deb http://packages.ros.org/ros2/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros2-latest.list`
         ]);
-        yield utils.exec("sudo", ["apt-get", "update"]);
+        yield apt.runAptGetUpdate(maxRetryAttemps);
         // Install rosdep and vcs, as well as FastRTPS dependencies, OpenSplice, and RTI Connext.
         // vcs dependencies (e.g. git), as well as base building packages are not pulled by rosdep, so
         // they are also installed during this stage.
@@ -1094,6 +1086,28 @@ const aptDependencies = [
     // RTI Connext - required to ensure the installation in non-blocking
     "rti-connext-dds-5.3.1"
 ];
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+function runAptGetUpdate(maxRetryAttemps) {
+    return __awaiter(this, void 0, void 0, function* () {
+        for (var _i = 1; _i < maxRetryAttemps; _i++) {
+            yield utils.exec("echo 'Attempt: " + _i);
+            try {
+                yield utils.exec("sudo", ["apt-get", "update"]);
+                break;
+            }
+            catch (err) {
+                if (_i == maxRetryAttemps)
+                    return -1;
+                yield utils.exec("echo 'apt-get update filed. Waiting 1 sec before attempting again'");
+                yield delay(1000);
+            }
+        }
+        return 0;
+    });
+}
+exports.runAptGetUpdate = runAptGetUpdate;
 /**
  * Run apt-get install on list of specified packages.
  *
@@ -1104,7 +1118,7 @@ const aptDependencies = [
  * This package would normally be installed automatically by rosdep, but
  * there is no way to pass RTI_NC_LICENSE_ACCEPTED through rosdep.
  *
- * @param   packages        list of Debian pacakges to be installed
+ * @param   packages		list of Debian pacakges to be installed
  * @returns Promise<number> exit code
  */
 function runAptGetInstall(packages) {
@@ -1221,10 +1235,10 @@ const core = __importStar(__webpack_require__(470));
 /**
  * Execute a command and wrap the output in a log group.
  *
- * @param   commandLine     command to execute (can include additional args). Must be correctly escaped.
- * @param   args            optional arguments for tool. Escaping is handled by the lib.
- * @param   options         optional exec options.  See ExecOptions
- * @param   log_message     log group title.
+ * @param   commandLine	 command to execute (can include additional args). Must be correctly escaped.
+ * @param   args			optional arguments for tool. Escaping is handled by the lib.
+ * @param   options		 optional exec options.  See ExecOptions
+ * @param   log_message	 log group title.
  * @returns Promise<number> exit code
  */
 function exec(commandLine, args, options, log_message) {

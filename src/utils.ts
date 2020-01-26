@@ -8,10 +8,10 @@ import * as tr from "@actions/exec/lib/toolrunner";
 /**
  * Execute a command and wrap the output in a log group.
  *
- * @param   commandLine     command to execute (can include additional args). Must be correctly escaped.
- * @param   args            optional arguments for tool. Escaping is handled by the lib.
- * @param   options         optional exec options.  See ExecOptions
- * @param   log_message     log group title.
+ * @param   commandLine	 command to execute (can include additional args). Must be correctly escaped.
+ * @param   args			optional arguments for tool. Escaping is handled by the lib.
+ * @param   options		 optional exec options.  See ExecOptions
+ * @param   log_message	 log group title.
  * @returns Promise<number> exit code
  */
 export async function exec(

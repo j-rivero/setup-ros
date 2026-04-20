@@ -47,6 +47,7 @@ jobs:
           - ubuntu:20.04
           - ubuntu:22.04
           - ubuntu:24.04
+          - ubuntu:26.04
           - almalinux:8
           - almalinux:9
     steps:
@@ -149,6 +150,10 @@ jobs:
 
           # Rolling Ridley (see REP 2002: https://www.ros.org/reps/rep-2002.html)
           - docker_image: ubuntu:noble
+            ros_distribution: rolling
+            ros_version: 2
+
+          - docker_image: ubuntu:resolute
             ros_distribution: rolling
             ros_version: 2
 

@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "releases/*"
+      - jrivero/replace-apt-key_respect
   schedule:
     # Run the CI automatically twice per day to look for flakyness.
     - cron: "0 */12 * * *"

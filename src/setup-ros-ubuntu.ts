@@ -1,5 +1,7 @@
 import * as core from "@actions/core";
 import * as io from "@actions/io";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 import * as apt from "./package_manager/apt";
 import * as pip from "./package_manager/pip";
@@ -9,6 +11,8 @@ const rosAptSourceRepository =
 	"https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest";
 const rosAptSourceDownloadBase =
 	"https://github.com/ros-infrastructure/ros-apt-source/releases/download";
+const aptSourcesListPath = "/etc/apt/sources.list";
+const aptSourcesListDirectory = "/etc/apt/sources.list.d";
 
 /**
  * Configure basic OS stuff.
@@ -74,6 +78,147 @@ async function installRosAptSourcePackage(
 // Ubuntu distribution for ROS 1
 const ros1UbuntuVersion = "focal";
 
+function getRos2AptRepositoryPath(use_ros2_testing: boolean): string {
+	return `/ros2${use_ros2_testing ? "-testing" : ""}/ubuntu`;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getRos2AptRepositoryUrlPattern(use_ros2_testing: boolean): string {
+	return `https?:\\/\\/packages\\.ros\\.org${escapeRegExp(getRos2AptRepositoryPath(use_ros2_testing))}\\/?`;
+}
+
+function isRequestedRos2RepositoryConfiguredInListFile(
+	fileContents: string,
+	ubuntuCodename: string,
+	use_ros2_testing: boolean,
+): boolean {
+	const repositoryPattern = new RegExp(
+		`^deb(?:-src)?\\s+(?:\\[[^\\]]*\\]\\s+)?${getRos2AptRepositoryUrlPattern(use_ros2_testing)}\\s+${escapeRegExp(ubuntuCodename)}(?:\\s|$)`,
+	);
+
+	return fileContents.split("\n").some((line) => {
+		const trimmedLine = line.trim();
+		return (
+			trimmedLine !== "" &&
+			!trimmedLine.startsWith("#") &&
+			repositoryPattern.test(trimmedLine)
+		);
+	});
+}
+
+function isRequestedRos2RepositoryConfiguredInSourcesFile(
+	fileContents: string,
+	ubuntuCodename: string,
+	use_ros2_testing: boolean,
+): boolean {
+	const suitePattern = new RegExp(
+		`^Suites:\\s+.*\\b${escapeRegExp(ubuntuCodename)}\\b.*$`,
+		"m",
+	);
+	const uriPattern = new RegExp(
+		`^URIs:\\s+(?:\\S+\\s+)*${getRos2AptRepositoryUrlPattern(use_ros2_testing)}(?:\\s+\\S+)*$`,
+		"m",
+	);
+
+	return fileContents
+		.split(/\n\s*\n/)
+		.map((stanza) =>
+			stanza
+				.split("\n")
+				.filter((line) => !line.trim().startsWith("#"))
+				.join("\n"),
+		)
+		.some((stanza) => uriPattern.test(stanza) && suitePattern.test(stanza));
+}
+
+function isRequestedRos2RepositoryConfiguredInSourceFile(
+	aptSourceFile: { path: string; content: string },
+	ubuntuCodename: string,
+	use_ros2_testing: boolean,
+): boolean {
+	if (path.extname(aptSourceFile.path) === ".sources") {
+		return isRequestedRos2RepositoryConfiguredInSourcesFile(
+			aptSourceFile.content,
+			ubuntuCodename,
+			use_ros2_testing,
+		);
+	}
+
+	return isRequestedRos2RepositoryConfiguredInListFile(
+		aptSourceFile.content,
+		ubuntuCodename,
+		use_ros2_testing,
+	);
+}
+
+async function readAptSourceFiles(): Promise<
+	Array<{ path: string; content: string }>
+> {
+	const aptSourcePaths = [aptSourcesListPath];
+
+	try {
+		const sourceEntries = await fs.readdir(aptSourcesListDirectory, {
+			withFileTypes: true,
+		});
+		for (const sourceEntry of sourceEntries) {
+			if (sourceEntry.isFile()) {
+				aptSourcePaths.push(
+					path.join(aptSourcesListDirectory, sourceEntry.name),
+				);
+			}
+		}
+	} catch (error) {
+		if (!(error instanceof Error) || "code" in error === false) {
+			throw error;
+		}
+
+		if (error.code !== "ENOENT") {
+			throw error;
+		}
+	}
+
+	const aptSourceFiles: Array<{ path: string; content: string }> = [];
+	for (const aptSourcePath of aptSourcePaths) {
+		try {
+			aptSourceFiles.push({
+				path: aptSourcePath,
+				content: await fs.readFile(aptSourcePath, "utf8"),
+			});
+		} catch (error) {
+			if (!(error instanceof Error) || "code" in error === false) {
+				throw error;
+			}
+
+			if (error.code !== "ENOENT") {
+				throw error;
+			}
+		}
+	}
+
+	return aptSourceFiles;
+}
+
+export function shouldInstallRosAptSourcePackage(
+	ubuntuCodename: string,
+	use_ros2_testing: boolean,
+	aptSourceFiles: Array<{ path: string; content: string }>,
+): boolean {
+	if (ubuntuCodename === ros1UbuntuVersion) {
+		return true;
+	}
+
+	return !aptSourceFiles.some((aptSourceFile) =>
+		isRequestedRos2RepositoryConfiguredInSourceFile(
+			aptSourceFile,
+			ubuntuCodename,
+			use_ros2_testing,
+		),
+	);
+}
+
 /**
  * Determine the ROS APT source package to install.
  *
@@ -118,9 +263,25 @@ export async function runLinux(): Promise<void> {
 	await configOs();
 
 	const ubuntuCodename = await utils.determineDistribCodename();
-	await installRosAptSourcePackage(
-		determineAptSourcePackageName(ubuntuCodename, use_ros2_testing),
+	const aptSourcePackageName = determineAptSourcePackageName(
+		ubuntuCodename,
+		use_ros2_testing,
 	);
+	const aptSourceFiles = await readAptSourceFiles();
+
+	if (
+		shouldInstallRosAptSourcePackage(
+			ubuntuCodename,
+			use_ros2_testing,
+			aptSourceFiles,
+		)
+	) {
+		await installRosAptSourcePackage(aptSourcePackageName);
+	} else {
+		core.info(
+			`Skipping ${aptSourcePackageName}; the requested ROS 2 APT repository is already configured.`,
+		);
+	}
 
 	if ("noble" !== ubuntuCodename) {
 		// Temporary fix to avoid error mount: /var/lib/grub/esp: special device (...) does not exist.

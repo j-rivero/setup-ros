@@ -34893,14 +34893,19 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.shouldInstallRosAptSourcePackage = shouldInstallRosAptSourcePackage;
 exports.runLinux = runLinux;
 const core = __importStar(__nccwpck_require__(2186));
 const io = __importStar(__nccwpck_require__(7436));
+const fs = __importStar(__nccwpck_require__(3977));
+const path = __importStar(__nccwpck_require__(9411));
 const apt = __importStar(__nccwpck_require__(4671));
 const pip = __importStar(__nccwpck_require__(6744));
 const utils = __importStar(__nccwpck_require__(1314));
 const rosAptSourceRepository = "https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest";
 const rosAptSourceDownloadBase = "https://github.com/ros-infrastructure/ros-apt-source/releases/download";
+const aptSourcesListPath = "/etc/apt/sources.list";
+const aptSourcesListDirectory = "/etc/apt/sources.list.d";
 /**
  * Configure basic OS stuff.
  */
@@ -34961,6 +34966,88 @@ function installRosAptSourcePackage(aptSourcePackageName) {
 }
 // Ubuntu distribution for ROS 1
 const ros1UbuntuVersion = "focal";
+function getRos2AptRepositoryPath(use_ros2_testing) {
+    return `/ros2${use_ros2_testing ? "-testing" : ""}/ubuntu`;
+}
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function getRos2AptRepositoryUrlPattern(use_ros2_testing) {
+    return `https?:\\/\\/packages\\.ros\\.org${escapeRegExp(getRos2AptRepositoryPath(use_ros2_testing))}\\/?`;
+}
+function isRequestedRos2RepositoryConfiguredInListFile(fileContents, ubuntuCodename, use_ros2_testing) {
+    const repositoryPattern = new RegExp(`^deb(?:-src)?\\s+(?:\\[[^\\]]*\\]\\s+)?${getRos2AptRepositoryUrlPattern(use_ros2_testing)}\\s+${escapeRegExp(ubuntuCodename)}(?:\\s|$)`);
+    return fileContents.split("\n").some((line) => {
+        const trimmedLine = line.trim();
+        return (trimmedLine !== "" &&
+            !trimmedLine.startsWith("#") &&
+            repositoryPattern.test(trimmedLine));
+    });
+}
+function isRequestedRos2RepositoryConfiguredInSourcesFile(fileContents, ubuntuCodename, use_ros2_testing) {
+    const suitePattern = new RegExp(`^Suites:\\s+.*\\b${escapeRegExp(ubuntuCodename)}\\b.*$`, "m");
+    const uriPattern = new RegExp(`^URIs:\\s+(?:\\S+\\s+)*${getRos2AptRepositoryUrlPattern(use_ros2_testing)}(?:\\s+\\S+)*$`, "m");
+    return fileContents
+        .split(/\n\s*\n/)
+        .map((stanza) => stanza
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("#"))
+        .join("\n"))
+        .some((stanza) => uriPattern.test(stanza) && suitePattern.test(stanza));
+}
+function isRequestedRos2RepositoryConfiguredInSourceFile(aptSourceFile, ubuntuCodename, use_ros2_testing) {
+    if (path.extname(aptSourceFile.path) === ".sources") {
+        return isRequestedRos2RepositoryConfiguredInSourcesFile(aptSourceFile.content, ubuntuCodename, use_ros2_testing);
+    }
+    return isRequestedRos2RepositoryConfiguredInListFile(aptSourceFile.content, ubuntuCodename, use_ros2_testing);
+}
+function readAptSourceFiles() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const aptSourcePaths = [aptSourcesListPath];
+        try {
+            const sourceEntries = yield fs.readdir(aptSourcesListDirectory, {
+                withFileTypes: true,
+            });
+            for (const sourceEntry of sourceEntries) {
+                if (sourceEntry.isFile()) {
+                    aptSourcePaths.push(path.join(aptSourcesListDirectory, sourceEntry.name));
+                }
+            }
+        }
+        catch (error) {
+            if (!(error instanceof Error) || "code" in error === false) {
+                throw error;
+            }
+            if (error.code !== "ENOENT") {
+                throw error;
+            }
+        }
+        const aptSourceFiles = [];
+        for (const aptSourcePath of aptSourcePaths) {
+            try {
+                aptSourceFiles.push({
+                    path: aptSourcePath,
+                    content: yield fs.readFile(aptSourcePath, "utf8"),
+                });
+            }
+            catch (error) {
+                if (!(error instanceof Error) || "code" in error === false) {
+                    throw error;
+                }
+                if (error.code !== "ENOENT") {
+                    throw error;
+                }
+            }
+        }
+        return aptSourceFiles;
+    });
+}
+function shouldInstallRosAptSourcePackage(ubuntuCodename, use_ros2_testing, aptSourceFiles) {
+    if (ubuntuCodename === ros1UbuntuVersion) {
+        return true;
+    }
+    return !aptSourceFiles.some((aptSourceFile) => isRequestedRos2RepositoryConfiguredInSourceFile(aptSourceFile, ubuntuCodename, use_ros2_testing));
+}
 /**
  * Determine the ROS APT source package to install.
  *
@@ -35000,7 +35087,14 @@ function runLinux() {
         const installConnext = core.getInput("install-connext") === "true";
         yield configOs();
         const ubuntuCodename = yield utils.determineDistribCodename();
-        yield installRosAptSourcePackage(determineAptSourcePackageName(ubuntuCodename, use_ros2_testing));
+        const aptSourcePackageName = determineAptSourcePackageName(ubuntuCodename, use_ros2_testing);
+        const aptSourceFiles = yield readAptSourceFiles();
+        if (shouldInstallRosAptSourcePackage(ubuntuCodename, use_ros2_testing, aptSourceFiles)) {
+            yield installRosAptSourcePackage(aptSourcePackageName);
+        }
+        else {
+            core.info(`Skipping ${aptSourcePackageName}; the requested ROS 2 APT repository is already configured.`);
+        }
         if ("noble" !== ubuntuCodename) {
             // Temporary fix to avoid error mount: /var/lib/grub/esp: special device (...) does not exist.
             const arch = yield utils.getArch();
@@ -35552,6 +35646,14 @@ module.exports = require("node:events");
 
 /***/ }),
 
+/***/ 3977:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:fs/promises");
+
+/***/ }),
+
 /***/ 8849:
 /***/ ((module) => {
 
@@ -35573,6 +35675,14 @@ module.exports = require("node:http2");
 
 "use strict";
 module.exports = require("node:net");
+
+/***/ }),
+
+/***/ 9411:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:path");
 
 /***/ }),
 
